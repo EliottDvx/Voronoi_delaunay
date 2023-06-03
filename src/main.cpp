@@ -157,7 +157,77 @@ bool CircumCircle(
 
 void construitVoronoi(Application &app)
 {
-    
+    // Trier les points selon x
+    sort(app.points.begin(), app.points.end(), compareCoords);
+
+    // Vider la liste existante des triangles
+    app.triangles.clear();
+
+    // Créer un très grand triangle (-1000, -1000), (500, 3000), (1500, -1000)
+    Triangle bigT = Triangle({Coords{-1000, -1000}, Coords{500, 3000}, Coords{1500, -1000}});
+
+    // Le rajouter à la liste de triangles déjà créés
+    app.triangles.push_back(bigT);
+
+    // Pour chaque point P
+    for (std::size_t i = 0; i < app.points.size(); i++){
+        Coords P = app.points[i];
+
+        // Créer une liste de segments LS
+        std::vector<Segment> LS;
+
+        // Pour chaque triangle T
+        for(std::size_t j = 0; j < app.triangles.size(); j++){
+            Triangle T = app.triangles[j];
+
+            // Si le cercle circonscrit contient P
+            float xc, yc, rsqr;
+            if(CircumCircle(P.x, P.y, T.p1.x, T.p1.y, T.p2.x, T.p2.y, T.p3.x, T.p3.y, &xc, &yc, &rsqr)){
+                // Récupérer les différents segments de ce triangle dans LS
+                LS.push_back(Segment{T.p1, T.p2});
+                LS.push_back(Segment{T.p2, T.p3});
+                LS.push_back(Segment{T.p3, T.p1});
+
+                // Enlever le triangle T de la liste
+                app.triangles.erase(app.triangles.begin() + j);
+                j--;
+            }
+        }
+
+        // Pour chaque segment S de la liste LS
+        for(std::size_t j = 0; j < LS.size(); j++){
+            Segment S = LS[j];
+
+            // On compare avec les autres segments de la liste
+            for(std::size_t k = 0; k < LS.size(); k++){
+                if(k == j){
+                    continue;
+                }
+
+                Segment S2 = LS[k];
+
+                // Si les segments sont identiques
+                if(S.p1 == S2.p2 && S.p2 == S2.p1){
+                    // On les enlève de la liste
+                    LS.erase(LS.begin() + k);
+                    LS.erase(LS.begin() + j);
+                    j--;
+                    break;
+                }
+            }
+        }
+
+        // Pour chaque segment S de la liste LS
+        for(std::size_t j = 0; j < LS.size(); j++){
+            Segment S = LS[j];
+
+            // On crée un nouveau triangle composé du segment S et du point P
+            Triangle T = Triangle({S.p1, S.p2, P});
+
+            app.triangles.push_back(T);
+        }
+
+    }
 }
 
 bool handleEvent(Application &app)
