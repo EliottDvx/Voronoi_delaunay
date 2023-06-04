@@ -29,13 +29,29 @@ struct Triangle
     bool complet=false;
 };
 
+struct Polygone
+{
+    std::vector<Coords> points;
+    int r = rand() % 255;
+    int g = rand() % 255;
+    int b = rand() % 255;
+};
+
 struct Application
 {
     int width, height;
     Coords focus{100, 100};
+    enum DrawMode
+    {
+        SEGMENTS,
+        POLYGONES
+    };
+    DrawMode drawMode = POLYGONES;
 
     std::vector<Coords> points;
     std::vector<Triangle> triangles;
+    std::vector<Segment> voronoi;
+    std::vector<Polygone> polygones;
 };
 
 bool compareCoords(Coords point1, Coords point2)
@@ -80,14 +96,64 @@ void drawTriangles(SDL_Renderer *renderer, const std::vector<Triangle> &triangle
     }
 }
 
+bool comparePoints(const Coords& a, const Coords& b, const Coords& reference)
+{
+    double angleA = atan2(a.y - reference.y, a.x - reference.x);
+    double angleB = atan2(b.y - reference.y, b.x - reference.x);
+    
+    // Retourne vrai si l'angle de a est plus petit que l'angle de b
+    return angleA < angleB;
+}
+
+void sortPointsInClockwise(std::vector<Coords>& points)
+{
+    // Trouver le point avec la plus petite coordonnée y
+    Coords reference = points[0];
+    for (const Coords& point : points)
+    {
+        if (point.y < reference.y || (point.y == reference.y && point.x < reference.x))
+        {
+            reference = point;
+        }
+    }
+    
+    // Trier les points en fonction des angles polaires par rapport au point de référence
+    sort(points.begin(), points.end(), [&](const Coords& a, const Coords& b){
+        return comparePoints(a, b, reference);
+    });
+}
+
+void drawPolygones(SDL_Renderer *renderer, const std::vector<Polygone> &polygones)
+{
+    for (std::size_t i = 0; i < polygones.size(); i++)
+    {
+        const Polygone& p = polygones[i];
+        // Trier les points pour qu'ils soient dessinés dans les sens des aiguilles d'une montre
+        std::vector<Coords> points = p.points;
+        sortPointsInClockwise(points);
+
+
+        std::vector<Sint16> vx;
+        std::vector<Sint16> vy;
+        for (std::size_t j = 0; j < points.size(); j++)
+        {
+            vx.push_back(points[j].x);
+            vy.push_back(points[j].y);
+        }
+        filledPolygonRGBA(renderer, vx.data(), vy.data(), vx.size(), p.r, p.g, p.b, SDL_ALPHA_OPAQUE);
+    }
+}
+
 void draw(SDL_Renderer *renderer, const Application &app)
 {
     /* Remplissez cette fonction pour faire l'affichage du jeu */
     int width, height;
     SDL_GetRendererOutputSize(renderer, &width, &height);
 
-    drawPoints(renderer, app.points);
+    drawPolygones(renderer, app.polygones);
     drawTriangles(renderer, app.triangles);
+    drawPoints(renderer, app.points);
+    drawSegments(renderer, app.voronoi);
 }
 
 /*
@@ -160,8 +226,14 @@ void construitVoronoi(Application &app)
     // Trier les points selon x
     sort(app.points.begin(), app.points.end(), compareCoords);
 
-    // Vider la liste existante des triangles
+    // Vider la liste existante des triangles et des polygones
     app.triangles.clear();
+
+    // Vide la liste des segments de Voronoi
+    app.voronoi.clear();
+
+    // Vide la liste des polygones
+    app.polygones.clear();
 
     // Créer un très grand triangle (-1000, -1000), (500, 3000), (1500, -1000)
     Triangle bigT = Triangle({Coords{-1000, -1000}, Coords{500, 3000}, Coords{1500, -1000}});
@@ -226,8 +298,86 @@ void construitVoronoi(Application &app)
 
             app.triangles.push_back(T);
         }
-
     }
+
+    if(app.drawMode == Application::DrawMode::SEGMENTS){
+        // Pour chaque triangle T de la liste
+        for(std::size_t i = 0; i < app.triangles.size(); i++){
+            Triangle T = app.triangles[i];
+
+            // On regarde quels sont les triangles voisins
+            for(std::size_t j = 0; j < app.triangles.size(); j++){
+                Triangle T2 = app.triangles[j];
+
+                // Si les triangles sont identiques
+                if(T.p1 == T2.p1 && T.p2 == T2.p2 && T.p3 == T2.p3){
+                    continue;
+                }
+
+                int nbPointsCommuns = 0;
+                if(T.p1 == T2.p1 || T.p1 == T2.p2 || T.p1 == T2.p3){
+                    nbPointsCommuns++;
+                }
+                if(T.p2 == T2.p1 || T.p2 == T2.p2 || T.p2 == T2.p3){
+                    nbPointsCommuns++;
+                }
+                if(T.p3 == T2.p1 || T.p3 == T2.p2 || T.p3 == T2.p3){
+                    nbPointsCommuns++;
+                }
+
+                // Si T1 a deux points en commun avec T2 (et donc un segment en commun)
+                if(nbPointsCommuns == 2)
+                {
+                    // On relie les centres des cercles circonscrits des deux triangles par un segment de Voronoi si le segment n'existe pas déjà
+                    float xc1, yc1, rsqr1;
+                    float xc2, yc2, rsqr2;
+                    CircumCircle(T.p1.x, T.p1.y, T2.p1.x, T2.p1.y, T2.p2.x, T2.p2.y, T2.p3.x, T2.p3.y, &xc1, &yc1, &rsqr1);
+                    CircumCircle(T2.p1.x, T2.p1.y, T.p1.x, T.p1.y, T.p2.x, T.p2.y, T.p3.x, T.p3.y, &xc2, &yc2, &rsqr2);
+
+                    Segment S = Segment{Coords{(int)xc1, (int)yc1}, Coords{(int)xc2, (int)yc2}};
+
+                    bool segmentExiste = false;
+
+                    for(std::size_t k = 0; k < app.voronoi.size(); k++){
+                        Segment S2 = app.voronoi[k];
+                        if(S.p1 == S2.p1 && S.p2 == S2.p2){
+                            segmentExiste = true;
+                            break;
+                        }
+                    }
+                    if(!segmentExiste){
+                        app.voronoi.push_back(S);
+                    }
+                }
+            }
+        }
+    }
+    else if(app.drawMode == Application::DrawMode::POLYGONES){
+        // Pour chaque point P de la liste
+        for(std::size_t i = 0; i < app.points.size(); i++){
+            Coords P = app.points[i];
+
+            // On crée un polygone
+            Polygone polygone;
+
+            // On regarde quels sont les triangles qui contiennent P
+            for(std::size_t j = 0; j < app.triangles.size(); j++){
+                Triangle T = app.triangles[j];
+
+                // Si le triangle contient P
+                if(T.p1 == P || T.p2 == P || T.p3 == P){
+                    // On insère dans le polygone le centre du cercle circonscrit du triangle
+                    float xc, yc, rsqr;
+                    CircumCircle(T.p1.x, T.p1.y, T.p1.x, T.p1.y, T.p2.x, T.p2.y, T.p3.x, T.p3.y, &xc, &yc, &rsqr);
+                    polygone.points.push_back(Coords{(int)xc, (int)yc});
+                }
+            }
+
+            // On ajoute le polygone à la liste
+            app.polygones.push_back(polygone);
+        }
+    }
+    
 }
 
 bool handleEvent(Application &app)
@@ -258,6 +408,17 @@ bool handleEvent(Application &app)
             {
                 app.focus.y = 0;
                 app.points.push_back(Coords{e.button.x, e.button.y});
+                construitVoronoi(app);
+            }
+        }
+        else if (e.type == SDL_KEYDOWN)
+        {
+            if (e.key.keysym.sym == SDLK_s){
+                app.drawMode = Application::DrawMode::SEGMENTS;
+                construitVoronoi(app);
+            }
+            else if (e.key.keysym.sym == SDLK_p){
+                app.drawMode = Application::DrawMode::POLYGONES;
                 construitVoronoi(app);
             }
         }
